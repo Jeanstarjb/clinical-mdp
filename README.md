@@ -6,9 +6,14 @@ A Markov Decision Process (MDP) solver applied to an illustrative treatment-esca
 
 Sequential treatment decisions — how aggressively to treat a patient given their current state — are naturally framed as an MDP: a set of states, a set of possible actions, transition probabilities describing how the patient's state responds to each action, and a reward capturing the tradeoff between outcome and treatment burden. Solving the MDP gives the policy (an action for every state) that maximizes expected long-run reward.
 
-This repo solves a small, hand-authored diabetes-management scenario (4 states, 4 treatment intensities) by value iteration, then checks the result two independent ways: an analytical Bellman-residual check, and thousands of Monte Carlo rollouts.
+This repo solves a small diabetes-management scenario (4 states, 4 treatment intensities) by value iteration, then checks the result two independent ways: an analytical Bellman-residual check, and thousands of Monte Carlo rollouts.
 
-**The scenario data is synthetic.** Every transition probability and reward value in `backend/services/clinical_scenario.py` was hand-authored to be directionally plausible (more aggressive treatment improves control faster but carries more burden; being stuck in a bad state is costly) — none of it is derived from clinical trials, guidelines, or patient data. This demonstrates the algorithm, not medical guidance.
+**What's real and what's synthetic, explicitly:**
+
+- The **reward structure** uses a published multiplicative utility-decrement formula and its real coefficients from [Oh et al. 2021, *Scientific Reports*](https://doi.org/10.1038/s41598-021-86419-4) (`d_chronic=0.105`, `d_acute=0.052`, `d_risk=0.071`) — a real MDP-for-diabetes paper built on 69,446 patients' EHR data. Their 72-state model doesn't map onto this scenario's simpler 4-state ladder, so which decrement factors apply to which of our states is *our own interpretive mapping*, not something the paper specifies. Their treatment-cost term (`C_MED`) and reward baseline (`RWTP`) are never given numeric values in the paper, so those remain our own hand-authored relative scale.
+- **Transition probabilities** remain entirely synthetic — the paper's transitions were learned privately from raw EHR data and never published as a table, and no other public source provides this for a decision problem with an actual action choice (published health-economics Markov models for diabetes are almost all single-arm cost-effectiveness simulations, not multi-action decision problems).
+
+Full detail and citation are in `backend/services/clinical_scenario.py`. This demonstrates the algorithm on a partially-grounded scenario, not medical guidance.
 
 ## How it works
 
@@ -39,20 +44,22 @@ Solving the scenario (`gamma=0.9`) gives this optimal policy:
 
 | State | Optimal action |
 |---|---|
-| Controlled | Lifestyle |
+| Controlled | Monotherapy |
 | Suboptimal | Dual Therapy |
 | Uncontrolled | Insulin |
 | Complications | Insulin |
 
-Treatment intensity escalates as control worsens and de-escalates once controlled — this pattern emerged from solving the MDP, it was not hand-picked. Evaluated against a fixed baseline policy (always Monotherapy, regardless of state) via 2000 Monte Carlo rollouts from `Uncontrolled`:
+Treatment intensity escalates as control worsens — this pattern emerged from solving the MDP, it was not hand-picked. Evaluated against a fixed baseline policy (always Monotherapy, regardless of state) via 2000 Monte Carlo rollouts from `Uncontrolled`:
 
 | Policy | Mean discounted reward |
 |---|---|
-| Optimal (adaptive) | 58.75 ± 0.26 |
-| Baseline (fixed Monotherapy) | 51.99 ± 0.36 |
-| **Improvement** | **+6.77 (≈13%)** |
+| Optimal (adaptive) | 95.20 ± 0.03 |
+| Baseline (fixed Monotherapy) | 94.40 ± 0.04 |
+| **Improvement** | **+0.80 (≈0.85%)** |
 
-The Monte Carlo estimate for the optimal policy (58.75) closely matches value iteration's exact analytical value for that state (58.77) — the cross-validation `test_monte_carlo_matches_exact_value_function` checks exactly this.
+Worth being upfront about: this improvement is far more modest than an earlier version of this scenario reported (~13%, using a hand-invented reward scale with a much wider spread between "good" and "bad" states). Switching to the real, published decrement coefficients compressed that spread considerably — the honest result of using real numbers instead of ones chosen to make a clean demo. `Controlled` also changed optimal action, from `Lifestyle` to `Monotherapy` — with the narrower real utility spread, a treatment's small transition-probability edge now outweighs its (also rescaled) burden, which didn't hold under the old, wider-spread invented scale.
+
+The Monte Carlo estimate for the optimal policy (95.20) closely matches value iteration's exact analytical value for that state (95.20) — the cross-validation `test_monte_carlo_matches_exact_value_function` checks exactly this.
 
 ## Getting started
 
@@ -88,9 +95,9 @@ docker compose up --build
 
 ```bash
 $ curl -X POST http://127.0.0.1:8000/api/solve -H "Content-Type: application/json" -d '{"gamma": 0.9}'
-{"policy":{"Controlled":"Lifestyle","Suboptimal":"Dual Therapy","Uncontrolled":"Insulin","Complications":"Insulin"},
- "values":{"Controlled":78.42,"Suboptimal":69.20,"Uncontrolled":58.77,"Complications":38.28},
- "bellman_residual":8.33e-7}
+{"policy":{"Controlled":"Monotherapy","Suboptimal":"Dual Therapy","Uncontrolled":"Insulin","Complications":"Insulin"},
+ "values":{"Controlled":97.45,"Suboptimal":96.27,"Uncontrolled":95.20,"Complications":93.14},
+ "bellman_residual":8.72e-7}
 ```
 
 Endpoints: `GET /health`, `GET /api/scenario`, `POST /api/solve`, `POST /api/evaluate`. Interactive docs at `/docs`.
@@ -99,7 +106,7 @@ Endpoints: `GET /health`, `GET /api/scenario`, `POST /api/solve`, `POST /api/eva
 
 ```
 backend/services/mdp_engine.py         Value iteration + prioritized sweeping solvers
-backend/services/clinical_scenario.py  The (synthetic) scenario definition
+backend/services/clinical_scenario.py  Scenario definition (real reward coefficients, cited; synthetic transitions)
 backend/services/policy_evaluator.py   Monte Carlo policy evaluation
 backend/services/simulation_service.py Orchestration: solve + evaluate
 backend/main.py, routers/, schemas.py  FastAPI service

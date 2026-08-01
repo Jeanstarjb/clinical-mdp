@@ -18,10 +18,12 @@ st.set_page_config(page_title="Clinical MDP Demo", page_icon="🩺", layout="wid
 
 st.title("🩺 Clinical Decision Support via Markov Decision Processes")
 st.caption(
-    "A treatment-escalation policy computed by value iteration on an illustrative "
-    "diabetes-management scenario, then checked against 1000s of Monte Carlo rollouts. "
-    "**Every transition probability and reward here is synthetic** -- hand-authored to be "
-    "directionally plausible, not derived from clinical data. This demonstrates a decision "
+    "A treatment-escalation policy computed by value iteration on a diabetes-management "
+    "scenario, then checked against 1000s of Monte Carlo rollouts. The reward structure uses "
+    "real published decrement coefficients "
+    "([Oh et al. 2021, Scientific Reports](https://doi.org/10.1038/s41598-021-86419-4)); "
+    "**transition probabilities remain synthetic** (no public source publishes these for a "
+    "multi-action decision problem -- see the README). This demonstrates a decision "
     "algorithm, not medical guidance."
 )
 
