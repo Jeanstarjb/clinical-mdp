@@ -1,34 +1,5 @@
-version: '3.8'
-
 services:
-  backend:
-    build: ./backend
+  api:
+    build: .
     ports:
       - "8000:8000"
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: cdss
-      DB_USER: admin
-      DB_PASSWORD: securepass
-    depends_on:
-      - postgres
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: cdss
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: securepass
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:

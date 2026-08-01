@@ -1,65 +1,68 @@
-import pytest
-from services.policy_evaluator import PolicyEvaluator
+import numpy as np
+
 from services.mdp_engine import ClinicalMDP
-from services.ddn_engine import ClinicalDDN, BeliefState
+from services.policy_evaluator import PolicyEvaluator
+from services import clinical_scenario
 
-@pytest.fixture
-def sample_mdp():
-    states = ['s1', 's2']
-    actions = ['a1', 'a2']
-    transition_probs = {
-        's1': {'a1': {'s2': 1.0}, 'a2': {'s1': 1.0}},
-        's2': {'a1': {'s2': 1.0}, 'a2': {'s1': 1.0}}
-    }
-    rewards = {'s1': {'a1': 5.0, 'a2': 0}, 's2': {'a1': -1.0, 'a2': 0}}
-    return ClinicalMDP(states, actions, transition_probs, rewards)
 
-@pytest.fixture
-def sample_ddn():
-    return ClinicalDDN(
-        states=['stable', 'critical'],
-        actions=['monitor', 'intervene'],
-        observations=['normal', 'abnormal'],
-        transition_model={
-            'stable': {
-                'monitor': {'stable': 0.8, 'critical': 0.2},
-                'intervene': {'stable': 0.9, 'critical': 0.1}
-            },
-            'critical': {
-                'monitor': {'stable': 0.3, 'critical': 0.7},
-                'intervene': {'stable': 0.6, 'critical': 0.4}
-            }
-        },
-        observation_model={
-            'stable': {
-                'monitor': {'normal': 0.9, 'abnormal': 0.1},
-                'intervene': {'normal': 0.7, 'abnormal': 0.3}
-            },
-            'critical': {
-                'monitor': {'normal': 0.2, 'abnormal': 0.8},
-                'intervene': {'normal': 0.5, 'abnormal': 0.5}
-            }
-        },
-        reward_model={
-            'stable': {'monitor': 1.0, 'intervene': 0.8},
-            'critical': {'monitor': -2.0, 'intervene': -1.0}
-        }
+def test_monte_carlo_matches_exact_value_function():
+    """The strongest correctness check: value_iteration computes V(s) by
+    exact dynamic programming; PolicyEvaluator estimates the same
+    quantity by simulating thousands of random rollouts under the
+    resulting policy. These are two independent computations of the
+    same number -- if they don't agree (within Monte Carlo noise),
+    something is wrong."""
+    mdp = ClinicalMDP(
+        states=clinical_scenario.STATES,
+        actions=clinical_scenario.ACTIONS,
+        transition_probs=clinical_scenario.TRANSITION_PROBS,
+        rewards=clinical_scenario.REWARDS,
+        gamma=clinical_scenario.GAMMA,
+    )
+    solved = mdp.value_iteration(epsilon=1e-10, max_iter=5000)
+
+    evaluator = PolicyEvaluator(mdp)
+    start_state = "Uncontrolled"
+    mc_result = evaluator.evaluate_policy(
+        solved['policy'], start_state=start_state, n_simulations=8000, max_steps=200
     )
 
-def test_mdp_policy_evaluation(sample_mdp, sample_ddn):
-    evaluator = PolicyEvaluator(sample_mdp, sample_ddn)
-    policy = {'s1': 'a1', 's2': 'a2'}
-    results = evaluator.evaluate_mdp_policy(policy, n_simulations=100)
-    assert 'mean_reward' in results
-    assert results['mean_reward'] > 0
+    exact_value = solved['values'][start_state]
+    mc_mean = mc_result['mean_reward']
+    mc_se = mc_result['std_error']
 
-def test_ddn_belief_update(sample_ddn):
-    initial_belief = BeliefState(probabilities={'stable': 0.7, 'critical': 0.3})
-    updated_belief = sample_ddn.update_belief(initial_belief, 'monitor', 'normal')
-    assert sum(updated_belief.probabilities.values()) == pytest.approx(1.0)
+    # Within ~5 standard errors -- generous given max_steps truncates the
+    # infinite-horizon sum, but tight enough to catch a real bug.
+    assert abs(exact_value - mc_mean) < 5 * mc_se + 0.5, (
+        f"exact V({start_state})={exact_value:.3f} vs Monte Carlo "
+        f"{mc_mean:.3f} +/- {mc_se:.3f} -- too far apart to be sampling noise"
+    )
 
-def test_monte_carlo_simulation(sample_ddn):
-    belief = BeliefState(probabilities={'stable': 0.6, 'critical': 0.4})
-    results = sample_ddn.monte_carlo_simulate_path(belief, {'type': 'clinical_guidelines'})
-    assert len(results['state_history']) == 100
-    assert 'total_discounted_reward' in results
+
+def test_optimal_policy_beats_fixed_baseline():
+    """The optimal (value-iteration) policy should never do worse, in
+    expectation, than a fixed baseline policy -- that's what "optimal"
+    means. This is checked with real simulation, not assumed."""
+    mdp = ClinicalMDP(
+        states=clinical_scenario.STATES,
+        actions=clinical_scenario.ACTIONS,
+        transition_probs=clinical_scenario.TRANSITION_PROBS,
+        rewards=clinical_scenario.REWARDS,
+        gamma=clinical_scenario.GAMMA,
+    )
+    solved = mdp.value_iteration()
+    evaluator = PolicyEvaluator(mdp)
+
+    comparison = evaluator.compare_policies(
+        {'optimal': solved['policy'], 'baseline': clinical_scenario.BASELINE_POLICY},
+        n_simulations=4000,
+    )
+
+    optimal_mean = comparison['optimal']['mean_reward']
+    baseline_mean = comparison['baseline']['mean_reward']
+    combined_se = comparison['optimal']['std_error'] + comparison['baseline']['std_error']
+
+    assert optimal_mean >= baseline_mean - 3 * combined_se, (
+        f"optimal policy ({optimal_mean:.3f}) underperformed baseline "
+        f"({baseline_mean:.3f}) by more than sampling noise explains"
+    )

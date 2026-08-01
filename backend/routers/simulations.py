@@ -1,26 +1,38 @@
-from fastapi import APIRouter, Depends
-from schemas import DDNSimulationParameters, SimulationResult
-from services.simulation_service import simulate_treatment_paths
-from database import get_db
-from models import Patient
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
+from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/simulate", tags=["Decision Simulation"])
+from schemas import EvaluateRequest, EvaluateResponse, ScenarioResponse, SolveRequest, SolveResponse
+from services import clinical_scenario
+from services.simulation_service import evaluate_optimal_vs_baseline, solve_policy
 
-@router.post("/{patient_id}", response_model=SimulationResult)
-async def run_simulation(
-    patient_id: str,
-    params: DDNSimulationParameters,
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Patient).filter(Patient.id == patient_id))
-    patient = result.scalars().first()
-    
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    
-    return await simulate_treatment_paths(
-        patient_data=patient.vital_signs,
-        params=params
+router = APIRouter(prefix="/api", tags=["Clinical MDP"])
+
+
+@router.get("/scenario", response_model=ScenarioResponse)
+def get_scenario():
+    return ScenarioResponse(
+        states=clinical_scenario.STATES,
+        actions=clinical_scenario.ACTIONS,
+        transition_probs=clinical_scenario.TRANSITION_PROBS,
+        rewards=clinical_scenario.REWARDS,
+        baseline_policy=clinical_scenario.BASELINE_POLICY,
     )
+
+
+@router.post("/solve", response_model=SolveResponse)
+def solve(req: SolveRequest):
+    result = solve_policy(gamma=req.gamma)
+    return SolveResponse(
+        policy=result['policy'],
+        values=result['values'],
+        bellman_residual=result['bellman_residual'],
+    )
+
+
+@router.post("/evaluate", response_model=EvaluateResponse)
+def evaluate(req: EvaluateRequest):
+    result = evaluate_optimal_vs_baseline(
+        start_state=req.start_state,
+        n_simulations=req.n_simulations,
+        gamma=req.gamma,
+    )
+    return EvaluateResponse(**result)

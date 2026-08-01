@@ -1,80 +1,56 @@
-from typing import Dict, Any, List
-from .ddn_engine import ClinicalDDN, BeliefState
+from typing import Dict
+
+from . import clinical_scenario
 from .mdp_engine import ClinicalMDP
 from .policy_evaluator import PolicyEvaluator
-from schemas import SimulationResult, DDNSimulationParameters
-import numpy as np
 
-async def simulate_treatment_paths(
-    patient_data: Dict[str, Any],
-    params: DDNSimulationParameters
-) -> SimulationResult:
-    # Initialize models
-    mdp = create_clinical_mdp(patient_data)
-    ddn = ClinicalDDN(
-        states=patient_data['possible_states'],
-        actions=patient_data['available_treatments'],
-        observations=patient_data['possible_observations'],
-        transition_model=patient_data['transition_model'],
-        observation_model=patient_data['observation_model'],
-        reward_model=patient_data['reward_model'],
-        discount=params.discount_factor
+
+def build_mdp(gamma: float = None) -> ClinicalMDP:
+    mdp = ClinicalMDP(
+        states=clinical_scenario.STATES,
+        actions=clinical_scenario.ACTIONS,
+        transition_probs=clinical_scenario.TRANSITION_PROBS,
+        rewards=clinical_scenario.REWARDS,
+        gamma=gamma if gamma is not None else clinical_scenario.GAMMA,
     )
-    
-    evaluator = PolicyEvaluator(mdp, ddn)
-    
-    # Run simulations based on type
-    if params.simulation_type == 'mdp':
-        policy = mdp.extract_optimal_policy()
-        evaluation = evaluator.evaluate_mdp_policy(
-            policy,
-            n_simulations=params.monte_carlo_runs
-        )
-    else:
-        initial_belief = BeliefState.parse_obj(patient_data['initial_belief'])
-        evaluation = evaluator.ddn_policy_analysis(
-            initial_belief,
-            horizon=params.horizon_steps
-        )
-    
-    # Comparative analysis
-    policies = [
-        {'name': 'current_guidelines', 'type': 'ddn', 'strategy': 'clinical_guidelines'},
-        {'name': 'mdp_optimal', 'type': 'mdp', 'strategy': 'value_iteration'},
-        {'name': 'ddn_adaptive', 'type': 'ddn', 'strategy': 'optimal'}
-    ]
-    comparison = evaluator.compare_policies(patient_data, policies)
+    mdp.validate()
+    return mdp
 
-    return SimulationResult(
-        optimal_policy=evaluation.get('optimal_policy', {}),
-        value_estimates={
-            'qaly': evaluation['value_estimate'],
-            'cost': evaluation.get('cost_estimate', 0)
+
+def solve_policy(gamma: float = None) -> Dict:
+    """Solve the scenario for the optimal policy via value iteration."""
+    mdp = build_mdp(gamma)
+    result = mdp.value_iteration()
+    result['bellman_residual'] = mdp.bellman_residual(result['values'])
+    return result
+
+
+def evaluate_optimal_vs_baseline(start_state: str = None, n_simulations: int = 2000,
+                                  gamma: float = None) -> Dict:
+    """Solve for the optimal policy, then Monte Carlo-evaluate it against
+    the fixed baseline ('always Monotherapy') policy under identical
+    conditions -- a real, computed comparison, not an assumed one."""
+    mdp = build_mdp(gamma)
+    solved = mdp.value_iteration()
+    optimal_policy = solved['policy']
+
+    evaluator = PolicyEvaluator(mdp)
+    comparison = evaluator.compare_policies(
+        {
+            'optimal': optimal_policy,
+            'baseline_monotherapy': clinical_scenario.BASELINE_POLICY,
         },
-        probabilistic_outcomes={
-            'success_probability': evaluation['policy_comparison']['ddn_adaptive']['mean_reward'],
-            'qaly_distribution': evaluation['qaly_distribution']
-        },
-        sensitivity_analysis=comparison['sensitivity_analysis'],
-        clinical_metrics={
-            'estimated_qaly_gain': comparison['cost_effectiveness']['qaly'],
-            'cost_per_qaly': comparison['cost_effectiveness']['icer']
-        },
-        simulation_metadata={
-            'model_type': params.simulation_type,
-            'run_id': generate_simulation_id(),
-            'timestamp': datetime.utcnow().isoformat()
-        }
+        start_state=start_state,
+        n_simulations=n_simulations,
     )
 
-def generate_simulation_id() -> str:
-    return f"SIM_{int(datetime.utcnow().timestamp())}_{np.random.randint(1000,9999)}"
+    optimal_mc_mean = comparison['optimal']['mean_reward']
+    baseline_mc_mean = comparison['baseline_monotherapy']['mean_reward']
 
-def create_clinical_mdp(patient_data: Dict) -> ClinicalMDP:
-    return ClinicalMDP(
-        states=patient_data['possible_states'],
-        actions=patient_data['available_treatments'],
-        transition_probs=patient_data['transition_model'],
-        rewards=patient_data['reward_model'],
-        gamma=0.9
-    )
+    return {
+        'optimal_policy': optimal_policy,
+        'state_values': solved['values'],
+        'bellman_residual': mdp.bellman_residual(solved['values']),
+        'comparison': comparison,
+        'improvement_over_baseline': optimal_mc_mean - baseline_mc_mean,
+    }
