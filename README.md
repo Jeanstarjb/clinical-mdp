@@ -118,4 +118,4 @@ Dockerfile, docker-compose.yml         Containerized deployment
 ## Roadmap
 
 - A partially-observable variant (POMDP) for settings where the true state isn't directly known, only inferred from noisy observations
-- Additional scenarios beyond diabetes management
+- Additional scenarios beyond diabetes management........
